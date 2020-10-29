@@ -7,6 +7,7 @@
 #include <float.h>
 #include <string>
 
+// デバッグ用
 class trace
 {
 private:
@@ -24,33 +25,87 @@ public:
 	}
 };
 
-double calcDist(std::vector<std::vector<double>> g /* 重心の配列 */, double data[200][2] /* データ */, int gi /* 重心のインデックス */, int i /* データのインデックス */)
+class idx_distance
 {
-	// trace c("calcDist");
-	return std::sqrt(std::pow(data[i][0] - g[gi][0], 2) + std::pow(data[i][1] - g[gi][1], 2));
+public:
+	int idx;
+	double distance;
+	idx_distance(int i, double d)
+	{
+		idx = i;
+		distance = d;
+	}
+};
+
+class by_distance
+{
+public:
+	bool operator()(const idx_distance &a, const idx_distance &b) const
+	{
+		return a.distance < b.distance;
+	}
+};
+
+double d(int idx_a, int idx_b, double data[200][2])
+{
+	// trace c("d");
+	return std::sqrt(std::pow(data[idx_a][0] - data[idx_b][0], 2) + std::pow(data[idx_a][1] - data[idx_b][1], 2));
 }
 
-bool checkG(std::vector<std::vector<double>> g, std::vector<std::vector<double>> g_old)
+std::vector<int> N_k(int idx, int k, double data[200][2])
 {
-	// trace cg("checkG");
-	int count = 0;
-	for (int i = 0; i < 3; i++)
+	// trace k_distance("N_k");
+	std::vector<idx_distance> idx_distance_list;
+	std::vector<int> N_k;
+	for (int i = 0; i < 200; i++)
 	{
-		if (g[i] == g_old[i])
+		if (i != idx) // 相手が自分自身の場合はスキップ
 		{
-			count++;
+			idx_distance point(i, d(idx, i, data));
+			idx_distance_list.push_back(point);
 		}
 	}
-	return count == 3;
+	sort(idx_distance_list.begin(), idx_distance_list.end(), by_distance());
+
+	double border_distance = idx_distance_list[k - 1].distance;
+	int i = 0;
+	while (idx_distance_list[i].distance <= border_distance)
+	{
+		N_k.push_back(idx_distance_list[i].idx);
+		i++;
+	}
+	return N_k;
 }
 
-void showG(std::vector<std::vector<double>> g)
+double reach_dist(int idx_a, int idx_b, double data[200][2], std::vector<double> distance_list)
 {
-	std::cout << "現在の重心" << std::endl;
-	for (int i = 0; i < g.size(); i++)
+	double ab_distance = d(idx_a, idx_b, data);
+	double k_distance = distance_list[idx_b];
+	return std::max(ab_distance, k_distance);
+}
+
+double lrd(int idx, double data[200][2], std::vector<double> distance_list, std::vector<std::vector<int>> N_list)
+{
+	int N_size = N_list[idx].size();
+	double reach_dist_sum = 0;
+	for (int i = 0; i < N_size; i++)
 	{
-		std::cout << g[i][0] << " " << g[i][1] << std::endl;
+		reach_dist_sum += reach_dist(idx, N_list[idx][i], data, distance_list);
 	}
+	return N_size / reach_dist_sum;
+}
+
+double lof(int idx, double data[200][2], std::vector<double> distance_list, std::vector<std::vector<int>> N_list, std::vector<double> lrd_list)
+{
+	double a_lrd = lrd_list[idx];
+	double b_lrd_sum = 0;
+	int N_size = N_list[idx].size();
+	for (int i = 0; i < N_size; i++)
+	{
+		int b_idx = N_list[idx][i];
+		b_lrd_sum += lrd_list[b_idx];
+	}
+	return (b_lrd_sum / N_size) / a_lrd;
 }
 
 int main(int argc, char *argv[])
@@ -60,9 +115,12 @@ int main(int argc, char *argv[])
 	int input;
 	int count = 0;
 	double data[200][2]; // the number of data is 200
-	int label[200];		 // kのインデックスを格納
 	int i = 0;
-	int k; // クラスタ数
+	int k;								  // k近傍の値を格納する変数
+	std::vector<std::vector<int>> N_list; // 各データのN_kを格納する配列
+	std::vector<double> distance_list;	  // 各データのk_distanceを格納する配列
+	std::vector<double> lrd_list;		  // 各データのlrd_kを格納する配列
+	std::vector<double> lof_list;		  // 各データのlofを格納する配列
 
 	//Input//
 	fp_in = fopen(argv[1], "r");
@@ -76,65 +134,28 @@ int main(int argc, char *argv[])
 		count++;
 	}
 
-	std::cout << "クラスタ数を入力してください: ";
+	// k近傍の値を設定する
+	std::cout << "k近傍の値を入力してください: ";
 	std::cin >> k;
 
-	//k-means//
-	// ランダムにk個の点を初期重心として指定する
-	std::vector<std::vector<double>>
-		g(k, std::vector<double>(2));								   // 現在の重心の座標の配列
-	std::vector<std::vector<double>> g_old(k, std::vector<double>(2)); // 前回の重心の座標の配列
-	for (i = 0; i < k; i++)
+	//lof//
+	for (int i = 0; i < 200; i++)
 	{
-		int idx = rand() % 200;
-		g[i][0] = data[idx][0];
-		g[i][1] = data[idx][1];
-	}
-	while (!checkG(g, g_old)) // 重心位置が変化していれば繰り返す
-	{
-		// trace w("while roop");
-		// showG(g);
-
-		// 重心位置を元にラベルを更新する
-		for (int l = 0; l < 200; l++) // 200個のデータについて
-		{
-			double min_dist = DBL_MAX;	// distの最小値を格納する変数。初期は最大値を設定しておく
-			int min_dist_label;			// distが最小の時のクラスタリングラベル（kのインデックス）を格納する変数
-			for (int j = 0; j < k; j++) // k個の重心それぞれについて
-			{
-				double dist = calcDist(g, data, j, l);
-				if (dist < min_dist)
-				{
-					min_dist = dist;
-					min_dist_label = j;
-				}
-			}
-			label[l] = min_dist_label;
-		}
-		// 更新されたラベルを元に重心位置を更新する
-		for (int j = 0; j < k; j++) // k個の重心それぞれについて
-		{
-			// 現在の重心の値を保存する
-			g_old[j][0] = g[j][0];
-			g_old[j][1] = g[j][1];
-			// 新しい重心の値を計算
-			double count = 0;
-			double sum_1 = 0;
-			double sum_2 = 0;
-			for (int l = 0; l < 200; l++) // 200個のデータについて
-			{
-				if (label[l] == j) // ラベルがjであるなら
-				{
-					count++;
-					sum_1 += data[l][0];
-					sum_2 += data[l][1];
-				}
-			}
-			g[j][0] = sum_1 / count;
-			g[j][1] = sum_2 / count;
-		}
+		N_list.push_back(N_k(i, k, data));					   // 各データについてN_kを計算し、N_listに格納
+		distance_list.push_back(d(i, N_list[i].back(), data)); // 各データについてk_distanceを計算し、distance_listに格納
 	}
 
+	// 各データについてlrd_kを計算し、lrd_listに格納
+	for (int i = 0; i < 200; i++)
+	{
+		lrd_list.push_back(lrd(i, data, distance_list, N_list));
+	}
+
+	// 各データについてLOFを計算し、lof_listに格納
+	for (int i = 0; i < 200; i++)
+	{
+		lof_list.push_back(lof(i, data, distance_list, N_list, lrd_list));
+	}
 	///////////
 
 	//Output//
@@ -144,10 +165,10 @@ int main(int argc, char *argv[])
 		printf("fail: cannot open the output-file. Change the name of output-file.  \n");
 		return -1;
 	}
-
+	// lof_value_listを出力
 	for (i = 0; i < 200; i++)
 	{
-		fprintf(fp_out, "%lf,%lf,%d\n", data[i][0], data[i][1], label[i]);
+		fprintf(fp_out, "%lf,%lf,%lf\n", data[i][0], data[i][1], lof_list[i]);
 	}
 	return 0;
 }
